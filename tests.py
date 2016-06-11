@@ -10,9 +10,12 @@ from ykar import *
 
 lis_tests = [
     ("(say (testing 1 (2.0) -3.14e159))", "['testing', 1, [2.0], -3.14e+159]"),
-    ("(new f (open-input-file fichier.txt))", None),
-    ("(read-file f)", "texte"),
-    # ajouter les autres codes à tester (close-file, open-output-file, write-in-file, load-file)
+    ("(new f1 (open-output-file (symbol fichier.txt)))", None),
+    ("(write-in-file f1 (symbol hello world !))", 13),
+    ("(close-file f1)", None),
+    ("(new f (open-input-file (symbol fichier.txt)))", None),
+    ("(read-file f)", "hello world !"),
+    # ajouter les autres codes à tester (load-file)
     ("(+ 2 2)", 4),
     ("(+ (* 2 100) (* 1 10))", 210),
     ("(if (> 6 5) (+ 1 1) (+ 2 2))", 2),

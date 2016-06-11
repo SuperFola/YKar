@@ -54,7 +54,7 @@ def recur_join(sep, x):
             work += str(e)
         else:
             work += str(e) + sep
-    return work
+    return work[:-1] if work[0] != '[' else work
 
 
 class Env(dict):
@@ -156,8 +156,6 @@ def atom(token):
         return True
     elif token == '#f':
         return False
-    elif token[0] == '"':
-        return token[1:-1]
     try:
         return int(token)
     except ValueError:
@@ -265,7 +263,7 @@ def eval_code(x, env):
                 return recur_join(' ', exp)
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need at least 1 argument")
+                                   "'say' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "use":
             if len(x) >= 2:
                 (_, *exp) = x
@@ -273,14 +271,14 @@ def eval_code(x, env):
                 return None
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need at least 1 argument")
+                                   "'use' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "show":
             if len(x) == 2:
                 (_, exp) = x
                 return env.find(exp)
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need exactly 1 argument")
+                                   "'show' need exactly 1 argument, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "match":
             if len(x) >= 3:
                 (_, cond, *patterns) = x
@@ -288,33 +286,34 @@ def eval_code(x, env):
                 for (pattern, new_code) in patterns:
                     if val == eval_code(pattern, env):
                         x = eval_code(new_code, env)
-            return raise_error("ArgumentError",
-                               "'" + x[0] + "' need at least 2 arguments")
+            else:
+                return raise_error("ArgumentError",
+                                   "'match' need at least 2 arguments, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "lambda":
             if len(x) == 3:
                 (_, params, body) = x
                 return Procedure(params, body, env)
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need exactly 2 arguments")
+                                   "'lambda' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "if":
             if len(x) == 4:
                 (_, test, conseq, alt) = x
                 x = conseq if eval_code(test, env) else alt
-            if len(x) == 3:
+            elif len(x) == 3:
                 (_, test, conseq) = x
                 if eval_code(test, env):
                     x = conseq
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need between 2 and 3 arguments")
+                                   "'if' need between 2 and 3 arguments, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "?":
             if len(x) == 2:
                 (_, test) = x
                 x = 1 if eval_code(test, env) else 0
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need exactly 1 argument")
+                                   "'?' need exactly 1 argument, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "new":
             if len(x) == 3 or len(x) == 4 and x[2] in env.keys():
                 (_, var, *exp) = x
@@ -330,7 +329,7 @@ def eval_code(x, env):
                                        "Can't override existing variable. Use set! instead")
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need exactly 2 arguments")
+                                   "'new' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "new-event":
             if len(x) == 3:
                 (_, var, cond, exp) = x
@@ -344,7 +343,7 @@ def eval_code(x, env):
                                        "Can't override existing event-driven variable. Use set!-event instead")
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need exactly 2 arguments")
+                                   "'new-event' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "set!":
             if len(x) == 3 or len(x) == 4 and x[2] in env.keys():
                 (_, var, *exp) = x
@@ -359,7 +358,7 @@ def eval_code(x, env):
                     return raise_error("SetError", "Can't overwrite a non existing variable. Use new instead")
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need exactly 2 arguments")
+                                   "'set!' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "set!-event":
             if len(x) == 3:
                 (_, var, cond, exp) = x
@@ -373,7 +372,7 @@ def eval_code(x, env):
                                        "Can't overwrite a non existing event-driven variable. Use new-event instead")
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need exactly 2 arguments")
+                                   "'set!-event' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "push":
             if len(x) >= 2:
                 (_, var, args) = x
@@ -383,7 +382,7 @@ def eval_code(x, env):
                     pushed[var]['triggered'] = True
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need at least 2 arguments")
+                                   "'push' need at least 2 arguments, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "del":
             if len(x) >= 2:
                 (_, *exp) = x
@@ -397,7 +396,7 @@ def eval_code(x, env):
                 return None
             else:
                 return raise_error("ArgumentError",
-                                   "'" + x[0] + "' need at least 1 argument")
+                                   "'del' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "begin":
             for exp in x[1:]:
                 eval_code(exp, env)
