@@ -8,6 +8,8 @@ import math
 import cmath
 import operator as op
 import time
+import os
+import itertools
 
 
 start_token = '('
@@ -15,6 +17,10 @@ end_token = ')'
 comment = ";"
 block_comment_token = "/*"
 block_comment_close_token = "*/"
+namespace_tok = '::'
+list_ns_opener = '{'
+list_ns_closer = '}'
+tokens = (start_token, end_token, namespace_tok, list_ns_opener, list_ns_closer)
 
 language_name = 'YKar'
 
@@ -62,6 +68,20 @@ class Env(dict):
             parms_keys = tuple([i[0] for i in parms])
         self.update(zip(parms_keys, args))
 
+    def __xor__(self, other):
+        new = Env()
+        for key in other:
+            if key not in self:
+                new[key] = other[key]
+        return new
+
+    def __and__(self, other):
+        new = Env()
+        for key in other:
+            if key in self and key in other:
+                new[key] = self[key]
+        return new
+
     def __getitem__(self, var):
         return dict.__getitem__(self, var) if (var in self) else None
 
@@ -91,14 +111,17 @@ def raise_error(err_type, msg):
 
 
 def tokenize(chars):
-    work = chars.replace(start_token, ' ( ').replace(end_token, ' ) ').split()
-    return work
+    for tok in tokens:
+        chars = chars.replace(tok, ' %s ' % tok)
+    return chars.split()
 
 
 def parse(program):
     tok = tokenize(program)
-    if '(' and ')' in tok:
+    if '(' and ')' in tok and len(tok) > 1:
         return read_from_tokens(tok)
+    elif len(tok) == 1:
+        return read_from_tokens(['('] + tok + [')'])
     return raise_error('SyntaxError', 'Missing the brackets')
 
 
@@ -148,7 +171,6 @@ def atom(token):
 
 
 def standard_env():
-    global env
     env = Env()
     env.update(vars(math))  # sin, cos, sqrt, pi, ...
     env.update(vars(cmath))
@@ -174,6 +196,39 @@ def standard_env():
         'symbol?': lambda x: isinstance(x, str)
     })
     return env
+
+
+def parse_use_instruction(env, code):
+    full_ns = []
+    list_content = []
+
+    h_lnc = False
+    h_lno = False
+
+    for token in code:
+        if token == list_ns_opener:
+            h_lno = True
+        elif token == list_ns_closer:
+            h_lnc = True
+        elif h_lnc and token not in (namespace_tok, list_ns_opener, list_ns_closer):
+            raise_error('ParseError', 'Token \'%s\' was not expected' % token)
+
+        if not h_lno and token != namespace_tok:
+            full_ns.append(token)
+            continue
+        elif h_lno and not h_lnc and token != list_ns_opener:
+            list_content.append(token)
+            continue
+
+    if os.path.exists(os.path.join(*full_ns)):
+        if not list_content:
+            env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) ^ standard_env()
+        else:
+            modules = Env()
+            modules.update(zip(list_content, itertools.repeat(None)))
+            env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) & modules
+    else:
+        raise_error('FileError', 'Lib can not be found at \'%s\'' % os.path.join(os.getcwd(), *full_ns))
 
 
 def check_events():
@@ -211,6 +266,14 @@ def eval_code(x, env):
             else:
                 return raise_error("ArgumentError",
                                    "'" + x[0] + "' need at least 1 argument")
+        elif x[0] == "use":
+            if len(x) >= 2:
+                (_, *exp) = x
+                parse_use_instruction(env, exp)
+                return None
+            else:
+                return raise_error("ArgumentError",
+                                   "'" + x[0] + "' need at least 1 argument")
         elif x[0] == "show":
             if len(x) == 2:
                 (_, exp) = x
@@ -218,6 +281,15 @@ def eval_code(x, env):
             else:
                 return raise_error("ArgumentError",
                                    "'" + x[0] + "' need exactly 1 argument")
+        elif x[0] == "match":
+            if len(x) >= 3:
+                (_, cond, *patterns) = x
+                val = eval_code(cond, env)
+                for (pattern, new_code) in patterns:
+                    if val == eval_code(pattern, env):
+                        x = eval_code(new_code, env)
+            return raise_error("ArgumentError",
+                               "'" + x[0] + "' need at least 2 arguments")
         elif x[0] == "lambda":
             if len(x) == 3:
                 (_, params, body) = x
@@ -350,6 +422,19 @@ def eval_code(x, env):
                         return raise_error(type(e).__name__, e)
 
 
+def load_env_from_file(path):
+    with open(path) as sr:
+        code = sr.readlines()
+
+    _env = standard_env()
+    for line in code:
+        if line.count(start_token) == line.count(end_token) and line.strip()[:2] != comment:
+            parsed = parse(line)
+            eval_code(parsed, _env)
+    del code
+    return _env
+
+
 def loop(env):
     std_prompt = language_name + ' > '
     not_eof_prompt = language_name + ' \' '
@@ -391,7 +476,7 @@ def load(file):
 
 
 def schemestr(exp):
-    return str(exp) if not isinstance(exp, list) else str(exp)[1:-1]
+    return to_string(exp)
 
 
 if __name__ == '__main__':
@@ -403,5 +488,4 @@ if __name__ == '__main__':
     i = ["Version 0.1", "Développé par Folaefolc", "", "", "", "(env) pour lister toutes les fonctions"]
     print("\n".join(" " * 4 + t[c] + " " * 8 + "- " + i[c] for c in range(len(t))), "\n")
     env = standard_env()
-    global env
     loop(env)

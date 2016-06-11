@@ -13,7 +13,7 @@ YKar est un langage de programmation inspiré du lisp. C'est un langage axé fon
 (increment (twice r))  ; 21
 (say hello world ! how do you do ?)  ; hello world ! how do you do ?
 (show r)  ; 10
-(env)  ; ... print all th environement
+(env)  ; ... print all the environement
 (if (> r 11) (say r > 11) (say r <= 11))  ; r <= 11
 (new-event my-event (= r 12) (say r = 12))
 (set! r (increment r))  ; nothing is printed on the screen, r != 12
@@ -25,4 +25,9 @@ YKar est un langage de programmation inspiré du lisp. C'est un langage axé fon
 (del var)
 (show var)  ; KeyError
 (- 20 (+ 2 (* 3 (twice r))))  ; 42
+(use folder::lib)
+(use folder::lib::{my_function})
+(folder::lib::a_function arg1)
+(my_function arg1)
+(match (> x 3) (#t (set! x 4)) (#f (set! x 2)))
 ```
