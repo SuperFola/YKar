@@ -14,8 +14,18 @@ lis_tests = [
     ("(write-in-file f1 (symbol hello world !))", 13),
     ("(close-file f1)", None),
     ("(new f (open-input-file (symbol fichier.txt)))", None),
-    ("(read-file f)", "hello world !"),
+    ("(new f3 (read-file f))", None),
+    ("(show f3)", "hello world !"),
+    ("(match f3 ((symbol hello world) (- 0 1)) ((symbol hello world  !) (+ 2 2)) ((symbol hello world !) (+ 3 2)))", 5),
     # ajouter les autres codes à tester (load-file)
+    ("(call/cc (lambda ((throw)) (+ 5 (* 10 (throw 1))))) ;; throw", 1),
+    ("(call/cc (lambda ((throw)) (+ 5 (* 10 1)))) ;; do not throw", 15),
+    ("""(call/cc (lambda ((throw))
+             (+ 5 (* 10 (call/cc (lambda ((escape)) (* 100 (escape 3)))))))) ; 1 level""", 35),
+    ("""(call/cc (lambda ((throw))
+             (+ 5 (* 10 (call/cc (lambda ((escape)) (* 100 (throw 3)))))))) ; 2 levels""", 3),
+    ("""(call/cc (lambda ((throw))
+             (+ 5 (* 10 (call/cc (lambda ((escape)) (* 100 1))))))) ; 0 levels""", 1005),
     ("(+ 2 2)", 4),
     ("(+ (* 2 100) (* 1 10))", 210),
     ("(if (> 6 5) (+ 1 1) (+ 2 2))", 2),
@@ -29,8 +39,10 @@ lis_tests = [
     ("(new kind (lambda ((x)) (+ x x)))", None),
     ("(kind 5)", 10),
     ("(new twice (lambda ((x)) (* 2 x)))", None), ("(twice 5)", 10),
-    ("(new compose (lambda ((f) (g)) (lambda (x) (f (g x)))))", None),
+    ("(new compose (lambda ((f) (g)) (lambda ((x)) (f (g x)))))", None),
     ("(new repeat (lambda ((f)) (compose f f)))", None),
+    ("(new test (repeat twice))", None),
+    ("(test 2)", 8),
     ("(new fact (lambda ((n)) (if (<= n 1) 1 (* n (fact (- n 1))))))", None),
     ("(fact 3)", 6),
     ("(fact 50)", 30414093201713378043612608166064768844377641568960512000000000000),
@@ -44,10 +56,11 @@ lis_tests = [
     ("(new zip2 (combine cons))", None),
     ("(zip (list 1 2 3 4) (list 5 6 7 8))", [(1, 5), (2, 6), (3, 7), (4, 8)]),
     ("""(new riff-shuffle (lambda ((deck)) (begin
-    (new take (lambda ((n) (seq)) (if (<= n 0) (say ()) (cons (car seq) (take (- n 1) (cdr seq))))))
-    (new drop (lambda ((n) (seq)) (if (<= n 0) seq (drop (- n 1) (cdr seq)))))
-    (new mid (lambda ((seq)) (/ (length seq) 2)))
-    ((combine append) (take (mid deck) deck) (drop (mid deck) deck)))))""", None),
+        (new take (lambda ((n) (seq)) (if (<= n 0) (say 0) (cons (car seq) (take (- n 1) (cdr seq))))))
+        (new drop (lambda ((n) (seq)) (if (<= n 0) seq (drop (- n 1) (cdr seq)))))
+        (new mid (lambda ((seq)) (/ (length seq) 2)))
+        (new combi-append (combine append))
+        (combi-append (take (mid deck) deck) (drop (mid deck) deck)))))""", None),
     ("(riff-shuffle (list 1 2 3 4 5 6 7 8))", [1, 5, 2, 6, 3, 7, 4, 8])
 ]
 

@@ -24,37 +24,14 @@ tokens = (start_token, end_token, namespace_tok, list_ns_opener, list_ns_closer)
 
 language_name = 'YKar'
 
-ev = {}
-pushed = {}
-is_checking_evs = False
+
+def raise_error(err_type, msg):
+    print(err_type, ':', msg)
 
 
-def to_string(x):
-    """Convert a Python object back into a Lisp-readable string."""
-    if x is True:
-        return "#t"
-    elif x is False:
-        return "#f"
-    elif isinstance(x, str):
-        return x
-    elif isinstance(x, str):
-        return '"%s"' % x.replace('"', r'\"')
-    elif isinstance(x, list):
-        return '(' + ' '.join(map(to_string, x)) + ')'
-    elif isinstance(x, complex):
-        return str(x).replace('j', 'i')
-    else:
-        return str(x)
-
-
-def recur_join(sep, x):
-    work = ""
-    for e in x:
-        if isinstance(e, list):
-            work += str(e)
-        else:
-            work += str(e) + sep
-    return work[:-1] if work[0] != '[' else work
+def require(expr, err_kind, err_msg):
+    if not expr:
+        raise err_kind(err_msg)
 
 
 class Env(dict):
@@ -106,30 +83,72 @@ class Procedure(object):
         return eval_code(self.body, Env(self.params, args, self.env))
 
 
-def raise_error(err_type, msg):
-    print(err_type, ':', msg)
+def to_string(x):
+    """Convert a Python object back into a Lisp-readable string."""
+    if x is True:
+        return "#t"
+    elif x is False:
+        return "#f"
+    elif isinstance(x, str):
+        return x
+    elif isinstance(x, str):
+        return '"%s"' % x.replace('"', r'\"')
+    elif isinstance(x, list):
+        return '(' + ' '.join(map(to_string, x)) + ')'
+    elif isinstance(x, complex):
+        return str(x).replace('j', 'i')
+    else:
+        return str(x)
+
+
+def recur_join(sep, x):
+    work = ""
+    for e in x:
+        if isinstance(e, list):
+            work += str(e)
+        else:
+            work += str(e) + sep
+    return work[:-1] if work[0] != '[' else work
 
 
 def tokenize(chars):
     for tok in tokens:
         chars = chars.replace(tok, ' %s ' % tok)
-    return chars.split()
+
+    work = []
+    word = ""
+    sym_tok = False
+    for i, c in enumerate(chars):
+        if sym_tok:
+            if i + 1 < len(chars):
+                if chars[i + 1] == end_token:
+                    sym_tok = False
+        if (c != " " or sym_tok) and c not in ('\r', '\n', '\r\n'):
+            word += c
+        else:
+            if not sym_tok and word:
+                work.append(word)
+            if word == "symbol":
+                sym_tok = True
+                word = ""
+            if not sym_tok:
+                word = ""
+    return work
 
 
-def parse(program):
-    tok = tokenize(program)
-    if '(' and ')' in tok and len(tok) > 1:
-        return read_from_tokens(tok)
-    elif len(tok) == 1:
-        return read_from_tokens(['('] + tok + [')'])
-    return raise_error('SyntaxError', 'Missing the brackets')
+def parse(code):
+    tokens = tokenize(code)
+    parsed = None
+    if '(' in tokens and ')' in tokens:
+        parsed = read_from_tokens(tokens)
+    require(parsed is not None, SyntaxError, "Missing brackets")
+    return parsed
 
 
 def read_from_tokens(tokens):
-    if not len(tokens):
-        return raise_error('SyntaxError', 'Unexpected EOF while reading')
-
+    require(bool(tokens), SyntaxError, "Unexpected EOF while reading")
     token = tokens.pop(0)
+    require(token != end_token, SyntaxError, "Unexpected '%s'" % token)
 
     if token == block_comment_token:
         while tokens[0] != block_comment_close_token:
@@ -141,11 +160,9 @@ def read_from_tokens(tokens):
         ast = []
         while tokens[0] != end_token:
             ast.append(read_from_tokens(tokens))
-        tokens.pop(0)  # pop off ')'
+        tokens.pop(0)
         return ast
     elif token == end_token:
-        return raise_error('SyntaxError', 'Unexpected ' + token)
-    elif token == comment:
         pass
     else:
         return atom(token)
@@ -175,6 +192,7 @@ def standard_env():
     env.update({
         '+': op.add, '-': op.sub, '*': op.mul, '/': op.truediv, '//': op.floordiv, '%': op.mod,
         '>': op.gt, '<': op.lt, '>=': op.ge, '<=': op.le, '=': op.eq, '!=': op.ne,
+        'append': op.add,
         'not': op.not_, 'eq?': op.is_, 'equal?': op.eq,
         'abs': abs, 'zip': lambda *x: list(zip(*x)),
         'car': lambda x: x[0], 'cdr': lambda x: x[1:], 'cons': lambda x, y: [x] + y,
@@ -191,7 +209,8 @@ def standard_env():
         'number?': lambda x: isinstance(x, (int, float)),
         'bool': lambda x: bool(x), 'bool?': lambda x: isinstance(x, bool),
         'procedure?': callable,
-        'symbol?': lambda x: isinstance(x, str)
+        'symbol?': lambda x: isinstance(x, str),
+        'call/cc': callcc
     })
     return env
 
@@ -204,12 +223,12 @@ def parse_use_instruction(env, code):
     h_lno = False
 
     for token in code:
+        require(h_lnc and token not in (namespace_tok, list_ns_opener, list_ns_closer),
+                SyntaxError, "Token '%s' was not expected" % token)
         if token == list_ns_opener:
             h_lno = True
         elif token == list_ns_closer:
             h_lnc = True
-        elif h_lnc and token not in (namespace_tok, list_ns_opener, list_ns_closer):
-            raise_error('ParseError', 'Token \'%s\' was not expected' % token)
 
         if not h_lno and token != namespace_tok:
             full_ns.append(token)
@@ -218,85 +237,73 @@ def parse_use_instruction(env, code):
             list_content.append(token)
             continue
 
-    if os.path.exists(os.path.join(*full_ns)):
-        if not list_content:
-            env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) ^ standard_env()
-        else:
-            modules = Env()
-            modules.update(zip(list_content, itertools.repeat(None)))
-            env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) & modules
+    require(os.path.exists(os.path.join(*full_ns)),
+            OSError, 'Lib can not be found at \'%s\'' % os.path.join(os.getcwd(), *full_ns))
+    if not list_content:
+        env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) ^ standard_env()
     else:
-        raise_error('FileError', 'Lib can not be found at \'%s\'' % os.path.join(os.getcwd(), *full_ns))
+        modules = Env()
+        modules.update(zip(list_content, itertools.repeat(None)))
+        env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) & modules
 
 
-def check_events():
-    global ev, pushed, is_checking_evs, env
+def callcc(proc):
+    ball = RuntimeWarning("Sorry, can't continue this continuation any longer.")
+    r = None
 
-    if not is_checking_evs:
-        is_checking_evs = True
-        for name, (cond, body) in ev.items():
-            if pushed[name]['triggered'] or eval_code(cond, env):
-                tmp = eval_code(body, env)
-                if isinstance(tmp, Procedure):
-                    tmp(*[eval_code(a, env) for a in pushed[name]['args']])
-                pushed[name]['triggered'] = False
-    is_checking_evs = False
+    def throw(retval):
+        nonlocal r
+        r = retval
+        raise ball
+
+    try:
+        print(throw)
+        return proc(throw)
+    except RuntimeWarning as w:
+        print(r)
+        if w is ball:
+            print('in')
+            return r
+        else:
+            raise_error(type(w).__name__, w)
 
 
 def eval_code(x, env):
-    global ev
-
     if isinstance(x, list):
-        if not x:
-            return raise_error('RuntimeError', 'Empty statement')
+        require(bool(x), RuntimeError, 'Empty statement')
 
     while True:
-        check_events()
-
         if isinstance(x, str):
             return env.find(x)
         elif not isinstance(x, list):
             return x
         elif x[0] == "say":
-            if len(x) >= 2:
-                (_, *exp) = x
-                return recur_join(' ', exp)
-            else:
-                return raise_error("ArgumentError",
-                                   "'say' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
+            require(len(x) >= 2, ValueError, "'say' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
+            (_, *exp) = x
+            return recur_join(' ', exp)
         elif x[0] == "use":
-            if len(x) >= 2:
-                (_, *exp) = x
-                parse_use_instruction(env, exp)
-                return None
-            else:
-                return raise_error("ArgumentError",
-                                   "'use' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
+            require(len(x) >= 2, ValueError, "'use' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
+            (_, *exp) = x
+            parse_use_instruction(env, exp)
+            return None
         elif x[0] == "show":
-            if len(x) == 2:
-                (_, exp) = x
-                return env.find(exp)
-            else:
-                return raise_error("ArgumentError",
-                                   "'show' need exactly 1 argument, got %i argument(s)" % (len(x) - 1))
+            require(len(x) == 2, ValueError, "'show' need exactly 1 argument, got %i argument(s)" % (len(x) - 1))
+            (_, exp) = x
+            return env.find(exp)
         elif x[0] == "match":
-            if len(x) >= 3:
-                (_, cond, *patterns) = x
-                val = eval_code(cond, env)
-                for (pattern, new_code) in patterns:
-                    if val == eval_code(pattern, env):
-                        x = eval_code(new_code, env)
-            else:
-                return raise_error("ArgumentError",
-                                   "'match' need at least 2 arguments, got %i argument(s)" % (len(x) - 1))
+            require(len(x) >= 3, ValueError, "'match' need at least 2 arguments, got %i argument(s)" % (len(x) - 1))
+            (_, cond, *patterns) = x
+            val = eval_code(cond, env)
+            for (pattern, new_code) in patterns:
+                if val == eval_code(pattern, env):
+                    return eval_code(new_code, env)
+            return None
         elif x[0] == "lambda":
-            if len(x) == 3:
-                (_, params, body) = x
-                return Procedure(params, body, env)
-            else:
-                return raise_error("ArgumentError",
-                                   "'lambda' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
+            require(len(x) == 3, ValueError, "'lambda' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
+            (_, params, body) = x
+            return Procedure(params, body, env)
         elif x[0] == "if":
+            require(3 <= len(x) <= 4, ValueError, "'if' need between 2 and 3 arguments, got %i argument(s)" % (len(x) - 1))
             if len(x) == 4:
                 (_, test, conseq, alt) = x
                 x = conseq if eval_code(test, env) else alt
@@ -304,99 +311,29 @@ def eval_code(x, env):
                 (_, test, conseq) = x
                 if eval_code(test, env):
                     x = conseq
-            else:
-                return raise_error("ArgumentError",
-                                   "'if' need between 2 and 3 arguments, got %i argument(s)" % (len(x) - 1))
-        elif x[0] == "?":
-            if len(x) == 2:
-                (_, test) = x
-                x = 1 if eval_code(test, env) else 0
-            else:
-                return raise_error("ArgumentError",
-                                   "'?' need exactly 1 argument, got %i argument(s)" % (len(x) - 1))
         elif x[0] == "new":
-            if len(x) == 3 or len(x) == 4 and x[2] in env.keys():
-                (_, var, *exp) = x
-                if var not in env.keys():
-                    tmp = eval_code(exp[0], env)
-                    if tmp:
-                        env[var] = tmp
-                        return None
-                    else:
-                        return raise_error('RuntimeError', 'The wanted value is impossible to create')
-                else:
-                    return raise_error("DefineError",
-                                       "Can't override existing variable. Use set! instead")
-            else:
-                return raise_error("ArgumentError",
-                                   "'new' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
-        elif x[0] == "new-event":
-            if len(x) == 3:
-                (_, var, cond, exp) = x
-                if var not in ev.keys():
-                    ev[var] = [eval_code(cond, env), eval_code(exp, env)]
-                    pushed[var]['args'] = []
-                    pushed[var]['triggered'] = False
-                    return None
-                else:
-                    return raise_error("DefineError",
-                                       "Can't override existing event-driven variable. Use set!-event instead")
-            else:
-                return raise_error("ArgumentError",
-                                   "'new-event' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
+            require(len(x) == 3, ValueError, "'new' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
+            (_, var, *exp) = x
+            require(var not in env.keys(), RuntimeError, "Can not overwrite existing variable, use set! instead")
+            tmp = eval_code(exp[0], env)
+            require(bool(tmp), RuntimeError, "Impossible to create the value")
+            env[var] = tmp
+            return None
         elif x[0] == "set!":
-            if len(x) == 3 or len(x) == 4 and x[2] in env.keys():
-                (_, var, *exp) = x
-                if var in env.keys():
-                    tmp = eval_code(exp[0], env)
-                    if tmp:
-                        env[var] = tmp
-                        return None
-                    else:
-                        return raise_error('RuntimeError', 'The wanted value is impossible to create')
-                else:
-                    return raise_error("SetError", "Can't overwrite a non existing variable. Use new instead")
-            else:
-                return raise_error("ArgumentError",
-                                   "'set!' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
-        elif x[0] == "set!-event":
-            if len(x) == 3:
-                (_, var, cond, exp) = x
-                if var in ev.keys():
-                    ev[var] = [eval_code(cond, env), eval_code(exp, env)]
-                    pushed[var]['args'] = []
-                    pushed[var]['triggered'] = False
-                    return None
-                else:
-                    return raise_error("SetError",
-                                       "Can't overwrite a non existing event-driven variable. Use new-event instead")
-            else:
-                return raise_error("ArgumentError",
-                                   "'set!-event' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
-        elif x[0] == "push":
-            if len(x) >= 2:
-                (_, var, args) = x
-                if isinstance(ev[var], Procedure):
-                    args = [eval_code(exp, env) for exp in args]
-                    pushed[var]['args'] = args
-                    pushed[var]['triggered'] = True
-            else:
-                return raise_error("ArgumentError",
-                                   "'push' need at least 2 arguments, got %i argument(s)" % (len(x) - 1))
+            require(len(x) == 3, ValueError, "'set!' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
+            (_, var, *exp) = x
+            require(var in env.keys(), RuntimeError, "Can not overwrite non existing variable, use new instead")
+            tmp = eval_code(exp[0], env)
+            require(bool(tmp), RuntimeError, "Impossible to create the value")
+            env[var] = tmp
+            return None
         elif x[0] == "del":
-            if len(x) >= 2:
-                (_, *exp) = x
-                for e in exp:
-                    if e in env.keys():
-                        del env[e]
-                    elif e in ev.keys():
-                        del env[e]
-                    else:
-                        raise_error('ArgumentError', '\'%s\' does not exist' % e)
-                return None
-            else:
-                return raise_error("ArgumentError",
-                                   "'del' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
+            require(len(x) >= 2, ValueError, "'del' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
+            (_, *exp) = x
+            for e in exp:
+                require(e in env.keys(), ValueError, "'%s' does not exist" % e)
+                del env[e]
+            return None
         elif x[0] == "begin":
             for exp in x[1:]:
                 eval_code(exp, env)
@@ -413,12 +350,7 @@ def eval_code(x, env):
                     x = proc.body
                     env = Env(proc.params, exps, proc.env)
                 else:
-                    try:
-                        return proc(*exps)
-                    except Exception as e:
-                        if isinstance(e, TypeError):
-                            return raise_error('RuntimeError', e)
-                        return raise_error(type(e).__name__, e)
+                    return proc(*exps)
 
 
 def load_env_from_file(path):
@@ -454,7 +386,11 @@ def loop(env):
             prompt = std_prompt
 
             parsed = parse(code)
-            val = eval_code(parsed, env)
+            # noinspection PyBroadException
+            try:
+                val = eval_code(parsed, env)
+            except Exception as exc:
+                print(type(exc).__name__, exc)
 
             if val is not None:
                 print(schemestr(val))
