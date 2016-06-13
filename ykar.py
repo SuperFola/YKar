@@ -75,8 +75,7 @@ class Env(dict):
 class Procedure(object):
     def __init__(self, params, body, envi):
         for elem in params:
-            if not isinstance(elem, list):
-                raise_error("SyntaxError", "Missing brace arround argument '%s'" % elem)
+            require(isinstance(elem, list), SyntaxError, "Missing brace arround argument '%s'" % elem)
         self.params, self.body, self.env = params, body, envi
 
     def __call__(self, *args):
@@ -89,51 +88,23 @@ def to_string(x):
         return "#t"
     elif x is False:
         return "#f"
+    elif x is None:
+        return "Nil"
     elif isinstance(x, str):
         return x
-    elif isinstance(x, str):
-        return '"%s"' % x.replace('"', r'\"')
     elif isinstance(x, list):
-        return '(' + ' '.join(map(to_string, x)) + ')'
+        return '(' + ' '.join(to_string(i) for i in x) + ')'
     elif isinstance(x, complex):
         return str(x).replace('j', 'i')
     else:
         return str(x)
 
 
-def recur_join(sep, x):
-    work = ""
-    for e in x:
-        if isinstance(e, list):
-            work += str(e)
-        else:
-            work += str(e) + sep
-    return work[:-1] if work[0] != '[' else work
-
-
 def tokenize(chars):
     for tok in tokens:
         chars = chars.replace(tok, ' %s ' % tok)
 
-    work = []
-    word = ""
-    sym_tok = False
-    for i, c in enumerate(chars):
-        if sym_tok:
-            if i + 1 < len(chars):
-                if chars[i + 1] == end_token:
-                    sym_tok = False
-        if (c != " " or sym_tok) and c not in ('\r', '\n', '\r\n'):
-            word += c
-        else:
-            if not sym_tok and word:
-                work.append(word)
-            if word == "symbol":
-                sym_tok = True
-                word = ""
-            if not sym_tok:
-                word = ""
-    return work
+    return chars.split()
 
 
 def parse(code):
@@ -173,6 +144,8 @@ def atom(token):
         return True
     elif token == '#f':
         return False
+    elif token == "Nil":
+        return None
     try:
         return int(token)
     except ValueError:
@@ -186,36 +159,49 @@ def atom(token):
 
 
 def standard_env():
-    env = Env()
-    env.update(vars(math))  # sin, cos, sqrt, pi, ...
-    env.update(vars(cmath))
-    env.update({
-        '+': op.add, '-': op.sub, '*': op.mul, '/': op.truediv, '//': op.floordiv, '%': op.mod,
+    _env = Env()
+    _env.update(vars(math))  # sin, cos, sqrt, pi, ...
+    _env.update(vars(cmath))
+    _env.update({
+        "+": lambda a, b: op.add(a, b), "-": lambda a, b: op.sub(a, b),
+        "/": lambda a, b: op.truediv(a, b), "*": lambda a, b: op.mul(a, b),
+        "//": lambda a, b: op.floordiv(a, b), "%": lambda a, b: op.mod(a, b),
+        "pow": lambda x, p: x ** p,
+
+        "^": lambda a, b: op.xor(a, b), "|": lambda a, b: op.or_(a, b),
+        "&": lambda a, b: op.and_(a, b), "~": lambda x: ~x,
+        ">>": lambda x, dc: x >> dc, "<<": lambda x, dc: x << dc,
+
         '>': op.gt, '<': op.lt, '>=': op.ge, '<=': op.le, '=': op.eq, '!=': op.ne,
-        'append': op.add,
         'not': op.not_, 'eq?': op.is_, 'equal?': op.eq,
-        'abs': abs, 'zip': lambda *x: list(zip(*x)),
-        'car': lambda x: x[0], 'cdr': lambda x: x[1:], 'cons': lambda x, y: [x] + y,
-        'length': len, 'type': lambda x: type(x).__name__,
+
+        'ord': ord, 'chr': chr,
+
+        '#': op.getitem, '#=': op.setitem, '#~': op.delitem, 'length': len,
         'list': lambda *x: list(x), 'list?': lambda x: isinstance(x, list),
-        'range': lambda start, stop: [_ for _ in range(start, stop + 1)],
+        'append': op.add, 'car': lambda x: x[0], 'cdr': lambda x: x[1:], 'cons': lambda x, y: [x] + y,
+        'join': lambda char, li: char.join(str(e) for e in li),
+
+        'time': time.time, 'round': round, 'abs': abs, 'zip': lambda *x: list(zip(*x)),
+        'type': lambda x: type(x).__name__, 'range': lambda start, stop: [_ for _ in range(start, stop + 1)],
         'map': lambda *x: list(map(*x)), 'max': max, 'min': min,
-        'time': time.time, 'round': round,
+
         'open-input-file': open, 'open-output-file': lambda f: open(f, 'w'), 'close-file': lambda f: f.close(),
         'read-file': lambda f: f.read(), 'write-in-file': lambda f, s: f.write(s),
         'load-file': lambda f: load(f),
-        'null': None, 'null?': lambda x: not not x,
-        'int': lambda x: int(x), 'float': lambda x: float(x),
-        'number?': lambda x: isinstance(x, (int, float)),
+
+        'null': None, 'null?': lambda x: bool(x),
+        'int': lambda x: int(x), 'float': lambda x: float(x), 'number?': lambda x: isinstance(x, (int, float)),
         'bool': lambda x: bool(x), 'bool?': lambda x: isinstance(x, bool),
         'procedure?': callable,
         'symbol?': lambda x: isinstance(x, str),
+
         'call/cc': callcc
     })
-    return env
+    return _env
 
 
-def parse_use_instruction(env, code):
+def parse_use_instruction(_env, code):
     full_ns = []
     list_content = []
 
@@ -240,47 +226,43 @@ def parse_use_instruction(env, code):
     require(os.path.exists(os.path.join(*full_ns)),
             OSError, 'Lib can not be found at \'%s\'' % os.path.join(os.getcwd(), *full_ns))
     if not list_content:
-        env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) ^ standard_env()
+        _env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) ^ standard_env()
     else:
         modules = Env()
         modules.update(zip(list_content, itertools.repeat(None)))
-        env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) & modules
+        _env[namespace_tok.join(full_ns)] = load_env_from_file(os.path.join(*full_ns)) & modules
 
 
 def callcc(proc):
     ball = RuntimeWarning("Sorry, can't continue this continuation any longer.")
     r = None
+    _err = False
 
     def throw(retval):
-        nonlocal r
+        nonlocal r, _err
         r = retval
+        _err = True
         raise ball
 
     try:
-        print(throw)
         return proc(throw)
     except RuntimeWarning as w:
-        print(r)
-        if w is ball:
-            print('in')
+        if _err or w is ball:
             return r
         else:
             raise_error(type(w).__name__, w)
 
 
 def eval_code(x, env):
-    if isinstance(x, list):
-        require(bool(x), RuntimeError, 'Empty statement')
-
     while True:
         if isinstance(x, str):
             return env.find(x)
         elif not isinstance(x, list):
             return x
-        elif x[0] == "say":
-            require(len(x) >= 2, ValueError, "'say' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
+
+        elif x[0] == "quote":
             (_, *exp) = x
-            return recur_join(' ', exp)
+            return " ".join(to_string(e) for e in exp)
         elif x[0] == "use":
             require(len(x) >= 2, ValueError, "'use' need at least 1 argument, got %i argument(s)" % (len(x) - 1))
             (_, *exp) = x
@@ -299,8 +281,14 @@ def eval_code(x, env):
                     return eval_code(new_code, env)
             return None
         elif x[0] == "lambda":
-            require(len(x) == 3, ValueError, "'lambda' need exactly 2 arguments, got %i argument(s)" % (len(x) - 1))
-            (_, params, body) = x
+            require(len(x) >= 3, ValueError, "'lambda' need at least 2 arguments, got %i argument(s)" % (len(x) - 1))
+            x.pop(0)
+            body = x.pop(-1)
+            params = x
+            for p in params:
+                if not isinstance(p, list):
+                    params = [[_p] for _p in params]
+                    break
             return Procedure(params, body, env)
         elif x[0] == "if":
             require(3 <= len(x) <= 4, ValueError, "'if' need between 2 and 3 arguments, got %i argument(s)" % (len(x) - 1))
@@ -316,7 +304,7 @@ def eval_code(x, env):
             (_, var, *exp) = x
             require(var not in env.keys(), RuntimeError, "Can not overwrite existing variable, use set! instead")
             tmp = eval_code(exp[0], env)
-            require(bool(tmp), RuntimeError, "Impossible to create the value")
+            require(tmp is not None, RuntimeError, "Impossible to create the value. Expression was : %s > %s" % (exp, tmp))
             env[var] = tmp
             return None
         elif x[0] == "set!":
@@ -324,7 +312,7 @@ def eval_code(x, env):
             (_, var, *exp) = x
             require(var in env.keys(), RuntimeError, "Can not overwrite non existing variable, use new instead")
             tmp = eval_code(exp[0], env)
-            require(bool(tmp), RuntimeError, "Impossible to create the value")
+            require(tmp is not None, RuntimeError, "Impossible to create the value. Expression was : %s > %s" % (exp, tmp))
             env[var] = tmp
             return None
         elif x[0] == "del":
@@ -338,19 +326,17 @@ def eval_code(x, env):
             for exp in x[1:]:
                 eval_code(exp, env)
             x = x[-1]
-        elif x[0] == "symbol":
-            return recur_join(' ', x[1:])
         elif x[0] == "env":
             return sorted(list(env.keys()))
+
         else:
-            if not isinstance(env.find(x[0]), str):
-                exps = [eval_code(exp, env) for exp in x]
-                proc = exps.pop(0)
-                if isinstance(proc, Procedure):
-                    x = proc.body
-                    env = Env(proc.params, exps, proc.env)
-                else:
-                    return proc(*exps)
+            exps = [eval_code(exp, env) for exp in x]
+            proc = exps.pop(0)
+            if isinstance(proc, Procedure):
+                x = proc.body
+                env = Env(proc.params, exps, proc.env)
+            else:
+                return proc(*exps)
 
 
 def load_env_from_file(path):
@@ -390,7 +376,8 @@ def loop(env):
             try:
                 val = eval_code(parsed, env)
             except Exception as exc:
-                print(type(exc).__name__, exc)
+                raise_error(type(exc).__name__, exc)
+                val = None
 
             if val is not None:
                 print(schemestr(val))
